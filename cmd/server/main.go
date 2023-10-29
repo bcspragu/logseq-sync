@@ -4,18 +4,21 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
 	"math/big"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
 	"time"
 
 	"nhooyr.io/websocket"
@@ -27,13 +30,62 @@ func main() {
 	}
 }
 
+type ResponseWriter struct {
+	http.ResponseWriter
+	StatusCode int
+	Buffer     bytes.Buffer
+}
+
+func (w *ResponseWriter) WriteHeader(status int) {
+	w.StatusCode = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *ResponseWriter) Write(p []byte) (int, error) {
+	w.Buffer.Write(p)
+	return w.ResponseWriter.Write(p)
+}
+
+var reqSkip = map[string]bool{
+	"accept":             true,
+	"accept-language":    true,
+	"user-agent":         true,
+	"sec-ch-ua-platform": true,
+	"sec-fetch-site":     true,
+	"content-length":     true,
+	"sec-ch-ua":          true,
+	"sec-ch-ua-mobile":   true,
+	"authorization":      true,
+	"sec-fetch-mode":     true,
+	"sec-fetch-dest":     true,
+	"accept-encoding":    true,
+}
+
 func run() error {
 	mux := http.NewServeMux()
 
+	// (def API-DOMAIN "api.logseq.com")
+	apiTarget := &url.URL{
+		Scheme: "https",
+		Host:   "api.logseq.com",
+	}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(apiTarget)
+		},
+	}
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Received request %s: %s %s", r.Method, r.URL.Path, r.URL.RawQuery)
-		r.ParseForm()
-		log.Printf("Form data: %+v", r.Form)
+		log.Printf("\n=====\nReceived request %s: %s %s", r.Method, r.URL.Path, r.URL.RawQuery)
+		// r.ParseForm()
+		// log.Printf("Form data: %+v", r.Form)
+
+		for k, vs := range r.Header {
+			if reqSkip[strings.ToLower(k)] {
+				continue
+			}
+			log.Printf("HEADER %q: %+v", k, vs)
+		}
 
 		dat, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -41,29 +93,20 @@ func run() error {
 			return
 		}
 		log.Printf("Request Body: %+v", string(dat))
+
+		r.Body = io.NopCloser(bytes.NewReader(dat))
+
+		ww := &ResponseWriter{ResponseWriter: w}
+		proxy.ServeHTTP(ww, r)
+
+		log.Printf("Response status: %d", ww.StatusCode)
+		// for k, vs := range ww.Header() {
+		// 	log.Printf("Response header %q: %+v", k, vs)
+		// }
+		log.Printf("Response body: %+v", ww.Buffer.String())
 	})
 
-	mux.HandleFunc("/file-sync", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Received WS/file-sync request %s: %s %s", r.Method, r.URL.Path, r.URL.RawQuery)
-
-		c, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			log.Printf("failed to upgrade HTTP request to websocket: %v", err)
-		}
-		defer c.CloseNow()
-
-		for {
-			typ, r, err := c.Reader(r.Context())
-			if err != nil {
-				log.Printf("failed to read websocket message: %v", err)
-			}
-			dat, err := io.ReadAll(r)
-			if err != nil {
-				log.Printf("failed to read data from websocket message: %v", err)
-			}
-			log.Printf("got message of type %q: %q", typ, hex.EncodeToString(dat))
-		}
-	})
+	mux.HandleFunc("/file-sync", proxyWS)
 
 	now := time.Now()
 	cert := &x509.Certificate{
@@ -114,4 +157,80 @@ func run() error {
 	}
 
 	return nil
+}
+
+func proxyWS(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log.Printf("Received WS/file-sync request %s: %s %s", r.Method, r.URL.Path, r.URL.RawQuery)
+
+	// Accept websocket connection from client
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		InsecureSkipVerify: true,
+		OriginPatterns:     []string{"*"},
+	})
+	if err != nil {
+		log.Printf("Failed to accept connection: %v", err)
+		return
+	}
+	defer c.Close(websocket.StatusInternalError, "")
+
+	// (def WS-URL "wss://ws.logseq.com/file-sync?graphuuid=%s")
+	remote, _, err := websocket.Dial(ctx, "wss://ws.logseq.com/file-sync?graphuuid="+r.URL.Query().Get("graphuuid"), nil)
+	if err != nil {
+		log.Printf("Failed to connect to remote server: %v", err)
+		return
+	}
+	defer remote.Close(websocket.StatusInternalError, "")
+
+	// Bi-directional copying
+	errorCh := make(chan error, 2)
+	go func() {
+		typ, rr, err := c.Reader(ctx)
+		if err != nil {
+			errorCh <- fmt.Errorf("failed to read from client: %w", err)
+			return
+		}
+		dat, err := io.ReadAll(rr)
+		if err != nil {
+			errorCh <- fmt.Errorf("failed to read WS message body from client: %w", err)
+			return
+		}
+		log.Printf("Received WS message from client: %+v", string(dat))
+		if err := remote.Write(ctx, typ, dat); err != nil {
+			errorCh <- fmt.Errorf("failed to write message to remote: %w", err)
+			return
+		}
+	}()
+
+	go func() {
+		typ, rr, err := remote.Reader(ctx)
+		if err != nil {
+			errorCh <- fmt.Errorf("failed to read from backend: %w", err)
+			return
+		}
+		dat, err := io.ReadAll(rr)
+		if err != nil {
+			errorCh <- fmt.Errorf("failed to read WS message body from backend: %w", err)
+			return
+		}
+		log.Printf("Received WS message from backend: %+v", string(dat))
+		if err := c.Write(ctx, typ, dat); err != nil {
+			errorCh <- fmt.Errorf("failed to write message to client: %w", err)
+			return
+		}
+	}()
+
+	err = <-errorCh // wait for error from any direction
+
+	log.Printf("Error when proxying connection: %v", err)
+
+	// Cleanup the other connection
+	if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
+		c.Close(websocket.StatusNormalClosure, "")
+		remote.Close(websocket.StatusNormalClosure, "")
+	} else {
+		c.Close(websocket.StatusInternalError, "An error occurred")
+		remote.Close(websocket.StatusInternalError, "An error occurred")
+	}
+
 }
