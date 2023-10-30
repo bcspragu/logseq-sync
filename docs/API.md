@@ -93,29 +93,34 @@ Response
 ### `/create_graph`
 
 Request: `{"GraphName":<graph name>}`
-Response: `{"graphuuid":"<graph uuid","txid":0}`
+Response: `{"GraphUUID":"<graph uuid>","TXId":0}`
 
 Or if the graph already exists: `{"message":"graph[<graph name>] already exists "}`
 
-# `/delete_graph`
+### `/delete_graph`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
 No response body, HTTP 200
 
-# `/get_graph_encrypt_keys`
+### `/get_graph_encrypt_keys`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
+
+Response
+
+```
+{
+  "public-key": "age<age public key>",
+  "encrypted-private-key": "-----BEGIN AGE ENCRYPTED FILE-----\n<base64 encoded, encrypted data, starts with "age-encryption.org/v1">>\n-----END AGE ENCRYPTED FILE-----\n"
+}
+
+```
+
 
 Response is HTTP 404 with no body if it doesn't exist
 
-# `/get_graph_salt`
-
-Request: `{"GraphUUID":"<graph uuid>"}`
-
-Response is HTTP 410 with no body, I think if it doesn't exist?
-
-# `/create_graph_salt`
+### `/create_graph_salt`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
@@ -128,13 +133,25 @@ Response
 } 
 ```
 
-# `/upload_graph_encrypt_keys`
+### `/get_graph_salt`
+
+Request: `{"GraphUUID":"<graph uuid>"}`
+
+Response
+
+```
+{"value":"<64-byte Base64 salt>","expired-at":<unix timestamp milliseconds>}
+```
+
+Response is HTTP 410 with no body if it doesn't exist (I think)
+
+### `/upload_graph_encrypt_keys`
 
 Request
 
 ```
 {
-  "encrypted-private-key":"-----BEGIN AGE ENCRYPTED FILE-----\n<base64 encrypted data, starts with "age-encryption.org/v1">\n-----END AGE ENCRYPTED FILE-----\n",
+  "encrypted-private-key":"-----BEGIN AGE ENCRYPTED FILE-----\n<base64 encoded, encrypted data, starts with "age-encryption.org/v1">\n-----END AGE ENCRYPTED FILE-----\n",
   "GraphUUID":"<graph uuid>",
   "public-key":"age<age public key>"
 }
@@ -142,7 +159,7 @@ Request
 
 Response is HTTP 200 with no body
 
-# `/get_all_files`
+### `/get_all_files`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
@@ -201,7 +218,7 @@ Notes:
 Request: `{"GraphUUID":"<graph uuid>"}`
 Response: `{"TXId":<a number>}`
 
-### /get_deletion_log_v20221212
+### `/get_deletion_log_v20221212`
 
 Request
 
@@ -250,11 +267,64 @@ Response
     "SecretKey": "<random string>",
     "SessionToken": "<long string>"
   },
-  "S3Prefix": "logseq-file-sync-bucket-prod/temp/us-east-1:<random uuid>"
+  "S3Prefix": "logseq-file-sync-bucket-prod/temp/us-east-1:<random, but stable uuid>"
 }
 ```
 
 I think this gives access to some random scratchpad to upload files, which are then moved into place?
+
+## `/update_files`
+
+Request
+
+```
+{
+  "Files": {
+    "e.<hex1>": [
+      "temp/us-east-1:<stable UUID from above>/<random string>",
+      "<probably a checksum>"
+    ],
+    "e.<hex2>": [
+      "temp/us-east-1:<stable UUID from above>/<different random string>",
+      "<probably a checksum>"
+    ],
+    "e.<hex3>": [
+      "temp/us-east-1:<stable UUID from above>/<different random string>",
+      "<probably a checksum>"
+    ],
+    "e.<hex4>": [
+      "temp/us-east-1:<stable UUID from above>/<different random string>",
+      "<probably a checksum>"
+    ]
+  },
+  "GraphUUID": "<graph uuid>",
+  "TXId": 0
+}
+```
+
+Response
+
+```
+{
+  "TXId": 1,
+  "UpdateFailedFiles": {},
+  "UpdateSuccFiles": [
+    "<user id>/<graph id>/e.<file ids>",
+    "<user id>/<graph id>/e.<file ids>",
+    "<user id>/<graph id>/e.<file ids>",
+    "<user id>/<graph id>/e.<file ids>"
+  ]
+}
+```
+
+
+### Connectivity Testing
+
+`GET https://logseq-connectivity-testing-prod.s3.us-east-1.amazonaws.com/logseq-connectivity-testing`
+
+[Specified here](https://github.com/logseq/logseq/blob/99a38de20177838237c67bb0589198ed6fa1fe95/src/main/frontend/config.cljs#L48), separate from API endpoint in the code. Seems like just a "do we have internet?" check.
+
+Nothing in the request body, HTTP 304 in the response
 
 ### Known endpoints to finish documenting
 
