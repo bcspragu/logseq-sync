@@ -6,29 +6,37 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
+	cryptorand "crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"math/big"
+	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
+	cryptorandrand "github.com/Silicon-Ally/cryptorand"
+	"github.com/bcspragu/logseq-sync/db"
+	"github.com/bcspragu/logseq-sync/httperr"
+	"github.com/bcspragu/logseq-sync/mem"
 	"nhooyr.io/websocket"
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(os.Args); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -64,10 +72,44 @@ var reqSkip = map[string]bool{
 	"accept-encoding":    true,
 }
 
-type server struct {
+type DB interface {
+	IncrementTx(id db.GraphID) (db.Tx, error)
+	Tx(id db.GraphID) (db.Tx, error)
+
+	Graph(id db.GraphID) (string, error)
+	CreateGraph(name string) (db.GraphID, db.Tx, error)
+
+	AddGraphSalt(id db.GraphID, salt *db.GraphSalt) error
+	GraphSalts(id db.GraphID) ([]*db.GraphSalt, error)
+
+	AddGraphEncryptKeys(id db.GraphID, gek *db.GraphEncryptKey) error
+	GraphEncryptKeys(id db.GraphID) ([]*db.GraphEncryptKey, error)
 }
 
-func run() error {
+type server struct {
+	db          DB
+	shouldProxy bool
+	proxy       *httputil.ReverseProxy
+
+	now func() time.Time
+
+	r *rand.Rand
+}
+
+func run(args []string) error {
+	if len(args) == 0 {
+		return errors.New("")
+	}
+
+	fs := flag.NewFlagSet(args[0], flag.ExitOnError)
+	var (
+		addr        = flag.String("addr", ":8000", "The address to host the sync server at")
+		shouldProxy = flag.Bool("proxy", true, "Whether or not certain endpoints (like /user-info) should proxy data to the real API, or return fake data.")
+	)
+	if err := fs.Parse(args[1:]); err != nil {
+		return fmt.Errorf("failed to parse flags: %w", err)
+	}
+
 	mux := http.NewServeMux()
 
 	// (def API-DOMAIN "api.logseq.com")
@@ -75,21 +117,23 @@ func run() error {
 		Scheme: "https",
 		Host:   "api.logseq.com",
 	}
-	proxy := &httputil.ReverseProxy{
-		Rewrite: func(r *httputil.ProxyRequest) {
-			r.SetURL(apiTarget)
-		},
-	}
 
-	s := server{}
+	s := server{
+		db:          mem.New(),
+		shouldProxy: *shouldProxy,
+		proxy: &httputil.ReverseProxy{
+			Rewrite: func(r *httputil.ProxyRequest) {
+				r.SetURL(apiTarget)
+			},
+		},
+		now: func() time.Time { return time.Now() },
+		r:   cryptorandrand.New(),
+	}
 	mux.HandleFunc(
 		"/get_files_meta",
 		toHandleFunc[getFilesMetaRequest, getFilesMetaResponse](s.getFilesMeta),
 	)
-	mux.HandleFunc(
-		"/user_info",
-		toHandleFunc[userInfoRequest, userInfoResponse](s.userInfo),
-	)
+	mux.HandleFunc("/user_info", s.serveUserInfo)
 	mux.HandleFunc(
 		"/list_graphs",
 		toHandleFunc[listGraphsRequest, listGraphsResponse](s.listGraphs),
@@ -128,7 +172,7 @@ func run() error {
 	)
 	mux.HandleFunc(
 		"/get_deletion_log_v20221212",
-		toHandleFunc[getDeletionRequest, getDeletionResponse](s.getDeletion),
+		toHandleFunc[getDeletionRequest, getDeletionResponse](s.getDeletionLog),
 	)
 	mux.HandleFunc(
 		"/get_files",
@@ -165,7 +209,7 @@ func run() error {
 		r.Body = io.NopCloser(bytes.NewReader(dat))
 
 		ww := &ResponseWriter{ResponseWriter: w}
-		proxy.ServeHTTP(ww, r)
+		s.proxy.ServeHTTP(ww, r)
 
 		log.Printf("Response status: %d", ww.StatusCode)
 		// for k, vs := range ww.Header() {
@@ -193,13 +237,13 @@ func run() error {
 		NotAfter:              now.AddDate(1, 0, 0),
 	}
 
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := rsa.GenerateKey(cryptorand.Reader, 2048)
 	if err != nil {
 		return fmt.Errorf("failed to generate RSA key: %w", err)
 	}
 
 	publicKey := &privateKey.PublicKey
-	certBytes, err := x509.CreateCertificate(rand.Reader, cert, cert, publicKey, privateKey)
+	certBytes, err := x509.CreateCertificate(cryptorand.Reader, cert, cert, publicKey, privateKey)
 	if err != nil {
 		return fmt.Errorf("failed to create x509 certificate: %w", err)
 	}
@@ -213,7 +257,7 @@ func run() error {
 	}
 
 	handler := http.Server{
-		Addr:    ":8000",
+		Addr:    *addr,
 		Handler: mux,
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{tlsCert},
@@ -304,9 +348,9 @@ func proxyWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleError(w http.ResponseWriter, err error) {
-	// TODO: Maybe introspect error for more specific status codes.
-	http.Error(w, "an error occurred", http.StatusInternalServerError)
-	log.Printf("error from handler: %v", err)
+	code, userMsg := httperr.Extract(err)
+	http.Error(w, userMsg, code)
+	log.Printf("error from handler %d, %s: %v", code, userMsg, err)
 }
 
 type getFilesMetaRequest struct {
@@ -342,6 +386,14 @@ type userInfoResponse struct {
 	LemonStatus   *string `json:"LemonStatus"`
 }
 
+func (s *server) serveUserInfo(w http.ResponseWriter, r *http.Request) {
+	if s.shouldProxy {
+		s.proxy.ServeHTTP(w, r)
+		return
+	}
+	toHandleFunc[userInfoRequest, userInfoResponse](s.userInfo)(w, r)
+}
+
 func (s *server) userInfo(ctx context.Context, req *userInfoRequest) (*userInfoResponse, error) {
 	return nil, errors.New("not implemented")
 }
@@ -371,7 +423,18 @@ type createGraphResponse struct {
 }
 
 func (s *server) createGraph(ctx context.Context, req *createGraphRequest) (*createGraphResponse, error) {
-	return nil, errors.New("not implemented")
+	gID, curTx, err := s.db.CreateGraph(req.GraphName)
+	if db.IsAlreadyExists(err) {
+		return nil, httperr.
+			Conflict("graph already exists: %w", err).
+			WithMessage("a graph with that name already exists")
+	} else if err != nil {
+		return nil, httperr.Internal("failed to create graph: %w", err)
+	}
+	return &createGraphResponse{
+		GraphUUID: string(gID),
+		Txid:      int64(curTx),
+	}, nil
 }
 
 type deleteGraphRequest struct {
@@ -406,7 +469,26 @@ type createGraphSaltResponse struct {
 }
 
 func (s *server) createGraphSalt(ctx context.Context, req *createGraphSaltRequest) (*createGraphSaltResponse, error) {
-	return nil, errors.New("not implemented")
+	_, err := s.db.Graph(db.GraphID(req.GraphUUID))
+	if db.IsNotExists(err) {
+		return nil, httperr.NotFound("graph %q wasn't found", req.GraphUUID)
+	} else if err != nil {
+		return nil, httperr.Internal("failed to load graph: %w", err)
+	}
+
+	b := make([]byte, 64)
+	if n, err := s.r.Read(b); err != nil {
+		return nil, httperr.Internal("failed to generate random bytes: %w", err)
+	} else if n != 64 {
+		return nil, httperr.Internal("expected to read 64 random bytes, read %d", n)
+	}
+
+	// Experimentally, these seem to expire about two months into the future?
+	exp := s.now().AddDate(0, 2, 0)
+	return &createGraphSaltResponse{
+		Value:     base64.StdEncoding.EncodeToString(b),
+		ExpiredAt: exp.UnixMilli(),
+	}, nil
 }
 
 type getGraphSaltRequest struct {
@@ -418,7 +500,23 @@ type getGraphSaltResponse struct {
 }
 
 func (s *server) getGraphSalt(ctx context.Context, req *getGraphSaltRequest) (*getGraphSaltResponse, error) {
-	return nil, errors.New("not implemented")
+	salts, err := s.db.GraphSalts(db.GraphID(req.GraphUUID))
+	if db.IsNotExists(err) {
+		return nil, httperr.NotFound("graph %q wasn't found", req.GraphUUID)
+	} else if err != nil {
+		return nil, httperr.Internal("failed to load graph salts: %w", err)
+	}
+	if len(salts) == 0 {
+		// This was observed in the original API
+		return nil, httperr.Gone("no salts in graph %q", req.GraphUUID)
+	}
+	salt := salts[len(salts)-1]
+
+	// XXX: The end salt is the latest, which maybe isn't a great assumption to bake into our DB API.
+	return &getGraphSaltResponse{
+		Value:     base64.StdEncoding.EncodeToString(salt.Value),
+		ExpiredAt: salt.ExpiredAt.UnixMilli(),
+	}, nil
 }
 
 type uploadGraphEncryptKeysRequest struct {
@@ -431,7 +529,16 @@ type uploadGraphEncryptKeysRequest struct {
 type uploadGraphEncryptKeysResponse struct{}
 
 func (s *server) uploadGraphEncryptKeys(ctx context.Context, req *uploadGraphEncryptKeysRequest) (*uploadGraphEncryptKeysResponse, error) {
-	return nil, errors.New("not implemented")
+	err := s.db.AddGraphEncryptKeys(db.GraphID(req.GraphUUID), &db.GraphEncryptKey{
+		EncryptedPrivateKey: req.EncryptedPrivateKey,
+		PublicKey:           req.PublicKey,
+	})
+	if db.IsNotExists(err) {
+		return nil, httperr.NotFound("graph %q wasn't found", req.GraphUUID)
+	} else if err != nil {
+		return nil, httperr.Internal("failed to load graph salts: %w", err)
+	}
+	return &uploadGraphEncryptKeysResponse{}, nil
 }
 
 type getAllFilesRequest struct {
@@ -461,7 +568,15 @@ type getTxidResponse struct {
 }
 
 func (s *server) getTxid(ctx context.Context, req *getTxidRequest) (*getTxidResponse, error) {
-	return nil, errors.New("not implemented")
+	tx, err := s.db.Tx(db.GraphID(req.GraphUUID))
+	if db.IsNotExists(err) {
+		return nil, httperr.NotFound("graph %q wasn't found", req.GraphUUID)
+	} else if err != nil {
+		return nil, httperr.Internal("failed to load graph: %w", err)
+	}
+	return &getTxidResponse{
+		Txid: int64(tx),
+	}, nil
 }
 
 type getDeletionRequest struct {
@@ -473,7 +588,7 @@ type getDeletionResponse struct {
 	Transactions []string `json:"Transactions"`
 }
 
-func (s *server) getDeletion(ctx context.Context, req *getDeletionRequest) (*getDeletionResponse, error) {
+func (s *server) getDeletionLog(ctx context.Context, req *getDeletionRequest) (*getDeletionResponse, error) {
 	return nil, errors.New("not implemented")
 }
 

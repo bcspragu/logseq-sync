@@ -6,7 +6,7 @@ An attempt at an open-source version of the [Logseq Sync](https://blog.logseq.co
 
 ## What's Done/Exists?
 
-Right now, the repo contains some basic tools for inspecting traffic from the Logseq client, and some documentation for the API in [docs/API.md](/docs/API.md). The server in [`cmd/server`](/cmd/server) has stubs for most of the known Logseq Sync API endpoints, but no functionality yet.
+Right now, the repo contains some basic tools for inspecting traffic from the Logseq client, and some documentation for the API in [docs/API.md](/docs/API.md). The server in [`cmd/server`](/cmd/server) has stubs for most of the known Logseq Sync API endpoints, and basic functionality for a few endpoints, backed by an in-memory database for testing.
 
 ## Open Questions
 
