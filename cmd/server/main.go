@@ -29,6 +29,8 @@ import (
 	"time"
 
 	cryptorandrand "github.com/Silicon-Ally/cryptorand"
+	"github.com/bcspragu/logseq-sync/blob"
+	"github.com/bcspragu/logseq-sync/blob/awsblob"
 	"github.com/bcspragu/logseq-sync/db"
 	"github.com/bcspragu/logseq-sync/httperr"
 	"github.com/bcspragu/logseq-sync/mem"
@@ -86,7 +88,12 @@ type DB interface {
 	GraphEncryptKeys(id db.GraphID) ([]*db.GraphEncryptKey, error)
 }
 
+type Blob interface {
+	GenerateTempCreds(ctx context.Context, prefix string) (*blob.Credentials, error)
+}
+
 type server struct {
+	blob        Blob
 	db          DB
 	shouldProxy bool
 	proxy       *httputil.ReverseProxy
@@ -105,6 +112,10 @@ func run(args []string) error {
 	var (
 		addr        = flag.String("addr", ":8000", "The address to host the sync server at")
 		shouldProxy = flag.Bool("proxy", true, "Whether or not certain endpoints (like /user-info) should proxy data to the real API, or return fake data.")
+
+		// Backend blob storage stuff
+		s3Bucket  = flag.String("s3_bucket", "", "Name of the S3 bucket to hand out temp credentials for.")
+		s3RoleARN = flag.String("s3_role_arn", "", "ARN of the role to grant temporary credentials for S3 bucket access from.")
 	)
 	if err := fs.Parse(args[1:]); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
@@ -118,7 +129,13 @@ func run(args []string) error {
 		Host:   "api.logseq.com",
 	}
 
+	awsBlob, err := awsblob.New(*s3Bucket, *s3RoleARN)
+	if err != nil {
+		return fmt.Errorf("failed to init AWS blob backend: %w", err)
+	}
+
 	s := server{
+		blob:        awsBlob,
 		db:          mem.New(),
 		shouldProxy: *shouldProxy,
 		proxy: &httputil.ReverseProxy{
