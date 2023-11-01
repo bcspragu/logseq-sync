@@ -16,7 +16,7 @@ Some notes on how I think the API works from observing traffic.
 
 All endpoints are HTTP `POST` and prefixed with `https://<API-DOMAIN>/file-sync/<api path>` unless otherwise noted.
 
-### `/get_files_meta`
+### [Implemented] `/get_files_meta`
 
 Request
 
@@ -52,7 +52,12 @@ Can also return `not found`, I think for new files
 ]
 ```
 
-### `/user_info`
+### [Implemented - Kinda] `/user_info`
+
+Self-hosted sync is currently single-user, so:
+
+* In proxy mode, it just asks the real Logseq API for user info
+* In not-proxy mode, it just makes stuff up
 
 Request: `{}`
 
@@ -71,7 +76,7 @@ Response
 }
 ```
 
-### `/list_graphs`
+### [Implemented] `/list_graphs`
 
 Request: `null`
 
@@ -90,20 +95,20 @@ Response
 }
 ```
 
-### `/create_graph`
+### [Implemented] `/create_graph`
 
 Request: `{"GraphName":<graph name>}`
 Response: `{"GraphUUID":"<graph uuid>","TXId":0}`
 
 Or if the graph already exists: `{"message":"graph[<graph name>] already exists "}`
 
-### `/delete_graph`
+### [Not Implemented] `/delete_graph`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
 No response body, HTTP 200
 
-### `/get_graph_encrypt_keys`
+### [Not Implemented] `/get_graph_encrypt_keys`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
@@ -120,7 +125,7 @@ Response
 
 Response is HTTP 404 with no body if it doesn't exist
 
-### `/create_graph_salt`
+### [Implemented] `/create_graph_salt`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
@@ -133,7 +138,7 @@ Response
 } 
 ```
 
-### `/get_graph_salt`
+### [Implemented] `/get_graph_salt`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
@@ -145,7 +150,7 @@ Response
 
 Response is HTTP 410 with no body if it doesn't exist (I think)
 
-### `/upload_graph_encrypt_keys`
+### [Implemented] `/upload_graph_encrypt_keys`
 
 Request
 
@@ -159,7 +164,7 @@ Request
 
 Response is HTTP 200 with no body
 
-### `/get_all_files`
+### [Not Implemented] `/get_all_files`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
@@ -213,12 +218,12 @@ Notes:
 * Keys are all different
 * Txid not all the same either
 
-### `/get_txid`
+### [Implemented] `/get_txid`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 Response: `{"TXId":<a number>}`
 
-### `/get_deletion_log_v20221212`
+### [Not Implemented] `/get_deletion_log_v20221212`
 
 Request
 
@@ -232,7 +237,7 @@ Request
 Response: `{"Transactions":[]}`
 
 
-### `/get_files`
+### [Not Implemented] `/get_files`
 
 Note: This comes from `rsapi`
 
@@ -255,7 +260,7 @@ Response
 }
 ```
 
-### `/get_temp_credential`
+### [Implemented] `/get_temp_credential`
 
 Response
 
@@ -273,7 +278,7 @@ Response
 
 I think this gives access to some random scratchpad to upload files, which are then moved into place?
 
-## `/update_files`
+### [Implemented] `/update_files`
 
 Request
 

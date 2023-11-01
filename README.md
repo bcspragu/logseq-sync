@@ -1,12 +1,14 @@
 # Logseq Sync
 
-Note: This project/repo is brand new, nothing works yet.
-
 An attempt at an open-source version of the [Logseq Sync](https://blog.logseq.com/how-to-setup-and-use-logseq-sync/) service, intended for individual, self-hosted use.
+
+It's not currently functional! Definitely don't try to point a real, populated Logseq client at it, I have no idea what will happen.
 
 ## What's Done/Exists?
 
-Right now, the repo contains some basic tools for inspecting traffic from the Logseq client, and some documentation for the API in [docs/API.md](/docs/API.md). The server in [`cmd/server`](/cmd/server) has stubs for most of the known Logseq Sync API endpoints, and basic functionality for a few endpoints, backed by an in-memory database for testing.
+Right now, the repo contains (in [`cmd/server`](/cmd/server)) a half-implemented version of the Logseq API, including credentialed blob uploads, an in-memory database (for testing only, will likely write a SQLite backend as the first persistent DB), and most of the API surface at least somewhat implemented.
+
+There's also some documentation for the API in [docs/API.md](/docs/API.md). The server.
 
 ## Open Questions
 

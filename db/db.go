@@ -7,7 +7,24 @@ import (
 	"time"
 )
 
-type GraphID string
+type (
+	GraphID string
+	FileID  string
+)
+
+type Graph struct {
+	ID   GraphID
+	Name string
+}
+
+type FileMeta struct {
+	ID             FileID
+	BlobPath       string
+	Checksum       []byte
+	Size           int64
+	LastModifiedAt time.Time
+	LastModifiedTX Tx
+}
 
 type Tx int64
 

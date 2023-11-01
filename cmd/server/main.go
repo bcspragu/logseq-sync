@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -25,6 +26,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -34,6 +36,7 @@ import (
 	"github.com/bcspragu/logseq-sync/db"
 	"github.com/bcspragu/logseq-sync/httperr"
 	"github.com/bcspragu/logseq-sync/mem"
+	"github.com/google/uuid"
 	"nhooyr.io/websocket"
 )
 
@@ -76,9 +79,11 @@ var reqSkip = map[string]bool{
 
 type DB interface {
 	IncrementTx(id db.GraphID) (db.Tx, error)
+	SetTx(id db.GraphID, tx db.Tx) error
 	Tx(id db.GraphID) (db.Tx, error)
 
-	Graph(id db.GraphID) (string, error)
+	Graph(id db.GraphID) (*db.Graph, error)
+	Graphs() ([]*db.Graph, error)
 	CreateGraph(name string) (db.GraphID, db.Tx, error)
 
 	AddGraphSalt(id db.GraphID, salt *db.GraphSalt) error
@@ -86,10 +91,15 @@ type DB interface {
 
 	AddGraphEncryptKeys(id db.GraphID, gek *db.GraphEncryptKey) error
 	GraphEncryptKeys(id db.GraphID) ([]*db.GraphEncryptKey, error)
+
+	SetFileMeta(id db.GraphID, md *db.FileMeta) error
+	BatchFileMeta(id db.GraphID, fIDs []db.FileID) ([]*db.FileMeta, error)
 }
 
 type Blob interface {
+	Bucket() string
 	GenerateTempCreds(ctx context.Context, prefix string) (*blob.Credentials, error)
+	Move(ctx context.Context, srcPath, destPath string) (*blob.MoveMeta, error)
 }
 
 type server struct {
@@ -385,7 +395,33 @@ type getFilesMetaResponseSingle struct {
 }
 
 func (s *server) getFilesMeta(ctx context.Context, req *getFilesMetaRequest) (*getFilesMetaResponse, error) {
-	return nil, errors.New("not implemented")
+	var fIDs []db.FileID
+	for _, f := range req.Files {
+		// TODO: Consider validating these, not sure how reliable the `e.<hex data>` is
+		// though, should dig into that a bit more.
+		fIDs = append(fIDs, db.FileID(f))
+	}
+
+	mds, err := s.db.BatchFileMeta(db.GraphID(req.GraphUUID), fIDs)
+	if err != nil {
+		return nil, httperr.Internal("failed to load batch file meta: %w", err)
+	}
+
+	var out []getFilesMetaResponseSingle
+	for _, md := range mds {
+		out = append(out, getFilesMetaResponseSingle{
+			FilePath:     string(md.ID),
+			Checksum:     string(md.Checksum),
+			LastModified: md.LastModifiedAt.UnixMilli(),
+			Size:         md.Size,
+			Txid:         int64(md.LastModifiedTX),
+		})
+	}
+
+	// This is a wonky thing to do, but the alternative is not using the handy-dandy
+	// toHandleFunc helper
+	resp := getFilesMetaResponse(out)
+	return &resp, nil
 }
 
 type userInfoRequest struct{}
@@ -412,7 +448,21 @@ func (s *server) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) userInfo(ctx context.Context, req *userInfoRequest) (*userInfoResponse, error) {
-	return nil, errors.New("not implemented")
+	// Just return some reasonable, fake response?
+	return &userInfoResponse{
+		ExpireTime: s.now().AddDate(0, 2, 0).Unix(), // Perpetually two months in the future
+		UserGroups: []string{
+			// NOTE: Consider making this configurable once we figure out what these groups
+			// mean/what they do/if they're useful.
+			"beta-tester",
+		},
+		ProUser:         true,
+		StorageLimit:    2 << 32, // A few GB
+		GraphCountLimit: 10,
+		LemonRenewsAt:   nil,
+		LemonEndsAt:     nil,
+		LemonStatus:     nil,
+	}, nil
 }
 
 type listGraphsRequest struct{}
@@ -428,7 +478,29 @@ type listGraphsResponseGraph struct {
 }
 
 func (s *server) listGraphs(ctx context.Context, req *listGraphsRequest) (*listGraphsResponse, error) {
-	return nil, errors.New("not implemented")
+	graphs, err := s.db.Graphs()
+	if err != nil {
+		return nil, httperr.Internal("failed to load graphs: %w", err)
+	}
+
+	var out []listGraphsResponseGraph
+	for _, g := range graphs {
+		out = append(out, listGraphsResponseGraph{
+			GraphStorageLimit: 2 << 32, // A few GB
+			GraphName:         g.Name,
+			GraphUUID:         string(g.ID),
+			// TODO: There's a bunch of ways we could actually return this accurately if it
+			// matters. In no particular order:
+			//    1. We store this info in FileMeta.Size, we could just sum that up (maybe as a DB method for efficient SQL implementations)
+			//    2. We could keep a running tally every time /update_files is called
+			//      - Less good because of the potential to get out of sync.
+			//    3. We could query our blob store for the aggregate size of everything under a prefix.
+			GraphStorageUsage: 123456,
+		})
+	}
+	return &listGraphsResponse{
+		Graphs: out,
+	}, nil
 }
 
 type createGraphRequest struct {
@@ -634,7 +706,26 @@ type getTempCredentialResponseCredentials struct {
 }
 
 func (s *server) getTempCredential(ctx context.Context, req *getTempCredentialRequest) (*getTempCredentialResponse, error) {
-	return nil, errors.New("not implemented")
+	prefix := "temp/" + uuid.NewString()
+	creds, err := s.blob.GenerateTempCreds(ctx, prefix)
+	if err != nil {
+		return nil, httperr.Internal("failed to generate temp creds: %w", err)
+	}
+
+	return &getTempCredentialResponse{
+		Credentials: &getTempCredentialResponseCredentials{
+			AccessKeyid:  creds.AccessKeyID,
+			Expiration:   creds.Expiration.Format("2006-01-02T15:04:05Z"),
+			SecretKey:    creds.SecretAccessKey,
+			SessionToken: creds.SessionToken,
+		},
+		// "logseq-file-sync-bucket-prod/temp/us-east-1:0a63b510-a45a-4b31-a152-efc54bea09b6"
+		// XXX: As far as I can tell, this is just <bucket>/<path>, not sure why the
+		// region is there, or why it's "colon UUID" instead of "slash UUID".
+		// For simplicity, I'm just going to do <bucket>/temp/<uuid> for now.
+		// If the Logseq client doesn't appreciate that, I can revisit.
+		S3Prefix: path.Join(s.blob.Bucket(), prefix),
+	}, nil
 }
 
 type updateFilesRequest struct {
@@ -644,6 +735,7 @@ type updateFilesRequest struct {
 	GraphUUID string `json:"GraphUUID"`
 	Txid      int64  `json:"TXId"`
 }
+
 type updateFilesResponse struct {
 	TXId int64 `json:"TXId"`
 	// XXX: I'm not sure about the type here
@@ -652,7 +744,67 @@ type updateFilesResponse struct {
 }
 
 func (s *server) updateFiles(ctx context.Context, req *updateFilesRequest) (*updateFilesResponse, error) {
-	return nil, errors.New("not implemented")
+	// Theoretically, the flow here is something like:
+	// 1. User calls getTempCredentials and gets
+	// 2. User PUTs some arbitrary number files to that location
+	//    - This seems like an attack vector, but a short expiration should mitigate?
+	// 3. User calls this endpoint, noting the files they uploaded (at random names) and their checksums
+	// 4. Server (us! right here!) moves those files into their permanent locations
+
+	gID := db.GraphID(req.GraphUUID)
+
+	dbTxID, err := s.db.Tx(gID)
+	if err != nil {
+		return nil, httperr.Internal("failed to load TX: %w", err)
+	}
+
+	// TODO: This doesn't seem to actually be a part of the API, so it might be
+	// fine, but the real API does namespace things by user ID. The most likely
+	// candidate is parsing it out of the `Authorization` header, which should be a
+	// JWT. It just feels icky to 'snoop' on sensitive credentials even if we aren't
+	// using them for anything nefarious.
+	userID := "THIS ISNT A REAL USER ID YOU NEED TO FIX THIS"
+	var successFiles []string
+	for id, tup := range req.Files {
+		srcPath, checksumStr := tup[0], tup[1]
+		checksum, err := hex.DecodeString(checksumStr)
+		if err != nil {
+			return nil, httperr.BadRequest("checksum %q wasn't hex-encoded", checksumStr)
+		}
+		if n := len(checksum); n != 16 {
+			return nil, httperr.BadRequest("checksum was %d bytes, expected 16 bytes", n)
+		}
+		dstPath := path.Join(userID, req.GraphUUID, id)
+		moveMeta, err := s.blob.Move(ctx, srcPath, dstPath)
+		if err != nil {
+			return nil, httperr.Internal("failed to move temp file: %w", err)
+		}
+		if err := s.db.SetFileMeta(gID, &db.FileMeta{
+			ID:             db.FileID(id),
+			BlobPath:       path.Join(s.blob.Bucket(), dstPath),
+			Checksum:       checksum,
+			Size:           moveMeta.Size,
+			LastModifiedAt: moveMeta.LastModified,
+			// TODO: Figure out transactions more generally, the pattern wasn't obvious to me.
+			LastModifiedTX: db.Tx(req.Txid),
+		}); err != nil {
+			return nil, httperr.Internal("failed to record file: %w", err)
+		}
+		successFiles = append(successFiles, dstPath)
+	}
+
+	curTX := max(req.Txid, int64(dbTxID)) + 1
+	if err := s.db.SetTx(gID, db.Tx(curTX)); err != nil {
+		return nil, httperr.Internal("failed to update tx: %w", err)
+	}
+
+	return &updateFilesResponse{
+		TXId: curTX,
+		// NOTE: Not sure in what case we'd want to use this. I guess maybe to only
+		// _partially_ fail above instead of failing everything?
+		UpdateFailedFiles: map[string]string{},
+		UpdateSuccFiles:   successFiles,
+	}, nil
 }
 
 func toHandleFunc[Q any, S any](fn func(context.Context, *Q) (*S, error)) http.HandlerFunc {

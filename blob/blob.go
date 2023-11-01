@@ -3,6 +3,11 @@ package blob
 
 import "time"
 
+type MoveMeta struct {
+	LastModified time.Time
+	Size         int64
+}
+
 type Credentials struct {
 	AccessKeyID     string
 	SecretAccessKey string
