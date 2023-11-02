@@ -6,7 +6,7 @@ It's not currently functional! Definitely don't try to point a real, populated L
 
 ## What's Done/Exists?
 
-Right now, the repo contains (in [`cmd/server`](/cmd/server)) a half-implemented version of the Logseq API, including credentialed blob uploads, an in-memory database (for testing only, will likely write a SQLite backend as the first persistent DB), and most of the API surface at least somewhat implemented.
+Right now, the repo contains (in [`cmd/server`](/cmd/server)) a mostly implemented version of the Logseq API, including credentialed blob uploads, signed blob downloads, an in-memory database (for testing only, will likely write a SQLite backend as the first persistent DB), and most of the API surface at least somewhat implemented.
 
 There's also some documentation for the API in [docs/API.md](/docs/API.md). The server.
 

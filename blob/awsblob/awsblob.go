@@ -142,3 +142,15 @@ func (c *Client) GenerateTempCreds(ctx context.Context, prefix string) (*blob.Cr
 		Expiration:      exp,
 	}, nil
 }
+
+func (c *Client) SignedDownloadURL(ctx context.Context, key string, dur time.Duration) (string, error) {
+	req, _ := c.s3.GetObjectRequest(&s3.GetObjectInput{
+		Bucket: aws.String(c.bkt),
+		Key:    aws.String(key),
+	})
+	urlStr, err := req.Presign(dur)
+	if err != nil {
+		return "", fmt.Errorf("failed to pre-sign S3 object: %w", err)
+	}
+	return urlStr, nil
+}

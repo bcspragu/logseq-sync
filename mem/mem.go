@@ -11,80 +11,93 @@
 package mem
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/bcspragu/logseq-sync/db"
 	"github.com/google/uuid"
 )
 
-type DB struct {
-	txs    map[db.GraphID]db.Tx
-	graphs map[db.GraphID]*db.Graph
-	salts  map[db.GraphID][]*db.GraphSalt
-	keys   map[db.GraphID][]*db.GraphEncryptKey
+type graph struct {
+	tx    db.Tx
+	graph *db.Graph
+	salts []*db.GraphSalt
+	keys  []*db.GraphEncryptKey
 	// We store the whole history of file metadata, for now.
-	meta map[db.GraphID]map[db.FileID][]*db.FileMeta
+	metas map[db.FileID][]*db.FileMeta
+}
+
+type DB struct {
+	graphs map[db.GraphID]*graph
 }
 
 func New() *DB {
 	return &DB{
-		txs:    make(map[db.GraphID]db.Tx),
-		graphs: make(map[db.GraphID]*db.Graph),
-		salts:  make(map[db.GraphID][]*db.GraphSalt),
-		keys:   make(map[db.GraphID][]*db.GraphEncryptKey),
-		meta:   make(map[db.GraphID]map[db.FileID][]*db.FileMeta),
+		graphs: make(map[db.GraphID]*graph),
 	}
+}
+
+func (d *DB) DeleteGraph(id db.GraphID) error {
+
+	if _, ok := d.graphs[id]; !ok {
+		return db.NotExists("graph", id)
+	}
+	delete(d.graphs, id)
+	return nil
 }
 
 func (d *DB) CreateGraph(name string) (db.GraphID, db.Tx, error) {
 	for _, g := range d.graphs {
-		if name == g.Name {
+		if name == g.graph.Name {
 			return "", 0, db.AlreadyExists("graph", "name")
 		}
 	}
 	id := db.GraphID(uuid.NewString())
-	d.graphs[id] = &db.Graph{
-		ID:   id,
-		Name: name,
+	tx := db.Tx(0)
+	d.graphs[id] = &graph{
+		graph: &db.Graph{
+			ID:   id,
+			Name: name,
+		},
+		salts: []*db.GraphSalt{},
+		keys:  []*db.GraphEncryptKey{},
+		metas: make(map[db.FileID][]*db.FileMeta),
+		tx:    tx,
 	}
-	d.salts[id] = []*db.GraphSalt{}
-	d.keys[id] = []*db.GraphEncryptKey{}
-	d.meta[id] = make(map[db.FileID][]*db.FileMeta)
-	d.txs[id] = 0
-	return id, d.txs[id], nil
+	return id, tx, nil
 }
 
 func (d *DB) Graphs() ([]*db.Graph, error) {
 	var out []*db.Graph
 	for _, g := range d.graphs {
-		out = append(out, g)
+		out = append(out, g.graph)
 	}
 	return out, nil
 }
 
 func (d *DB) Tx(id db.GraphID) (db.Tx, error) {
-	tx, ok := d.txs[id]
+	g, ok := d.graphs[id]
 	if !ok {
 		return 0, db.NotExists("graph", id)
 	}
-	return tx, nil
+	return g.tx, nil
 }
 
 func (d *DB) IncrementTx(id db.GraphID) (db.Tx, error) {
-	tx, ok := d.txs[id]
+	g, ok := d.graphs[id]
 	if !ok {
 		return 0, db.NotExists("graph", id)
 	}
-	tx++
-	d.txs[id] = tx
-	return tx, nil
+	g.tx++
+	return g.tx, nil
 }
 
 func (d *DB) SetTx(id db.GraphID, tx db.Tx) error {
-	if _, ok := d.txs[id]; !ok {
+	g, ok := d.graphs[id]
+	if !ok {
 		return db.NotExists("graph", id)
 	}
-	d.txs[id] = tx
+	g.tx = tx
 	return nil
 }
 
@@ -93,71 +106,91 @@ func (d *DB) Graph(id db.GraphID) (*db.Graph, error) {
 	if !ok {
 		return nil, db.NotExists("graph", id)
 	}
-	return g, nil
+	return g.graph, nil
 }
 
 func (d *DB) AddGraphSalt(id db.GraphID, salt *db.GraphSalt) error {
-	salts, ok := d.salts[id]
+	g, ok := d.graphs[id]
 	if !ok {
 		return db.NotExists("graph", id)
 	}
-	d.salts[id] = append(salts, salt)
+	g.salts = append(g.salts, salt)
 	return nil
 }
 
 func (d *DB) GraphSalts(id db.GraphID) ([]*db.GraphSalt, error) {
-	salts, ok := d.salts[id]
+	g, ok := d.graphs[id]
 	if !ok {
 		return nil, db.NotExists("graph", id)
 	}
-	return salts, nil
+	return g.salts, nil
 }
 
 func (d *DB) AddGraphEncryptKeys(id db.GraphID, gek *db.GraphEncryptKey) error {
-	keys, ok := d.keys[id]
+	g, ok := d.graphs[id]
 	if !ok {
 		return db.NotExists("graph", id)
 	}
-	d.keys[id] = append(keys, gek)
+	g.keys = append(g.keys, gek)
 	return nil
 }
 
 func (d *DB) GraphEncryptKeys(id db.GraphID) ([]*db.GraphEncryptKey, error) {
-	keys, ok := d.keys[id]
+	g, ok := d.graphs[id]
 	if !ok {
 		return nil, db.NotExists("graph", id)
 	}
-	return keys, nil
+	return g.keys, nil
 }
 
 func (d *DB) SetFileMeta(id db.GraphID, md *db.FileMeta) error {
-	metas, ok := d.meta[id]
+	if md.ID == "" {
+		return errors.New("no file ID set on metadata")
+	}
+	g, ok := d.graphs[id]
 	if !ok {
 		return db.NotExists("graph", id)
 	}
-	metas[md.ID] = append(metas[md.ID], md)
-	d.meta[id] = metas
+	g.metas[md.ID] = append(g.metas[md.ID], md)
 	return nil
 }
 
-func (d *DB) BatchFileMeta(id db.GraphID, fIDs []db.FileID) ([]*db.FileMeta, error) {
-	metas, ok := d.meta[id]
+func (d *DB) BatchFileMeta(id db.GraphID, fIDs []db.FileID) (map[db.FileID]*db.FileMeta, error) {
+	g, ok := d.graphs[id]
 	if !ok {
 		return nil, db.NotExists("graph", id)
 	}
 
-	var out []*db.FileMeta
+	out := make(map[db.FileID]*db.FileMeta)
 	for _, fID := range fIDs {
-		mds, ok := metas[fID]
+		mds, ok := g.metas[fID]
 		if !ok {
-			return nil, db.NotExists("file_meta", fID)
+			out[fID] = nil
+			continue
 		}
 		if len(mds) < 1 {
 			// Note: This indicates some sort of logic error, not client error
 			return nil, fmt.Errorf("no file metadata history found for %q", fID)
 		}
 		// Get the latest, which is the last one
-		out = append(out, mds[len(mds)-1])
+		out[fID] = mds[len(mds)-1]
+	}
+	return out, nil
+}
+
+func (d *DB) AllFileMeta(id db.GraphID) ([]*db.FileMeta, error) {
+	g, ok := d.graphs[id]
+	if !ok {
+		return nil, db.NotExists("graph", id)
+	}
+
+	var out []*db.FileMeta
+	for _, metas := range g.metas {
+		if len(metas) == 0 {
+			continue
+		}
+		// Get the latest
+		out = append(out, metas[len(metas)-1])
 	}
 	return out, nil
 }

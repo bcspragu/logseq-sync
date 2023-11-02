@@ -52,7 +52,7 @@ Can also return `not found`, I think for new files
 ]
 ```
 
-### [Implemented - Kinda] `/user_info`
+### [Implemented-ish] `/user_info`
 
 Self-hosted sync is currently single-user, so:
 
@@ -102,13 +102,13 @@ Response: `{"GraphUUID":"<graph uuid>","TXId":0}`
 
 Or if the graph already exists: `{"message":"graph[<graph name>] already exists "}`
 
-### [Not Implemented] `/delete_graph`
+### [Implemented] `/delete_graph`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
 No response body, HTTP 200
 
-### [Not Implemented] `/get_graph_encrypt_keys`
+### [Implemented] `/get_graph_encrypt_keys`
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
@@ -164,7 +164,9 @@ Request
 
 Response is HTTP 200 with no body
 
-### [Not Implemented] `/get_all_files`
+### [Implemented-ish] `/get_all_files`
+
+Endpoint is just missing pagination, but otherwise is functional
 
 Request: `{"GraphUUID":"<graph uuid>"}`
 
@@ -223,7 +225,9 @@ Notes:
 Request: `{"GraphUUID":"<graph uuid>"}`
 Response: `{"TXId":<a number>}`
 
-### [Not Implemented] `/get_deletion_log_v20221212`
+### [Implemented-ish] `/get_deletion_log_v20221212`
+
+The endpoint just returns nothing, I still need to figure out the shape of this endpoint.
 
 Request
 
@@ -237,7 +241,7 @@ Request
 Response: `{"Transactions":[]}`
 
 
-### [Not Implemented] `/get_files`
+### [Implemented] `/get_files`
 
 Note: This comes from `rsapi`
 
