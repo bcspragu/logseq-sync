@@ -88,7 +88,8 @@ type Blob interface {
 }
 
 type server struct {
-	blob        Blob
+	blob Blob
+
 	db          DB
 	shouldProxy bool
 	proxy       *httputil.ReverseProxy
@@ -97,6 +98,9 @@ type server struct {
 
 	r   *rand.Rand
 	jwt *jwt.Parser
+
+	// TODO: Figure out how to handle this more elegantly
+	region string
 }
 
 func run(args []string) error {
@@ -106,12 +110,13 @@ func run(args []string) error {
 
 	fs := flag.NewFlagSet(args[0], flag.ExitOnError)
 	var (
-		addr        = flag.String("addr", ":8000", "The address to host the sync server at")
-		shouldProxy = flag.Bool("proxy", true, "Whether or not certain endpoints (like /user_info) should proxy data to the real API, or return fake data.")
+		addr        = fs.String("addr", ":8000", "The address to host the sync server at")
+		shouldProxy = fs.Bool("proxy", true, "Whether or not certain endpoints (like /user_info) should proxy data to the real API, or return fake data.")
 
 		// Backend blob storage stuff
-		s3Bucket  = flag.String("s3_bucket", "", "Name of the S3 bucket to hand out temp credentials for.")
-		s3RoleARN = flag.String("s3_role_arn", "", "ARN of the role to grant temporary credentials for S3 bucket access from.")
+		s3Bucket  = fs.String("s3_bucket", "", "Name of the S3 bucket to hand out temp credentials for.")
+		s3Region  = fs.String("s3_region", "us-west-2", "Name of the S3 region where AWS resources live")
+		s3RoleARN = fs.String("s3_role_arn", "", "ARN of the role to grant temporary credentials for S3 bucket access from.")
 	)
 	if err := fs.Parse(args[1:]); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
@@ -139,9 +144,10 @@ func run(args []string) error {
 				r.SetURL(apiTarget)
 			},
 		},
-		now: func() time.Time { return time.Now() },
-		r:   cryptorandrand.New(),
-		jwt: jwt.NewParser(),
+		now:    func() time.Time { return time.Now() },
+		r:      cryptorandrand.New(),
+		jwt:    jwt.NewParser(),
+		region: *s3Region,
 	}
 	mux.HandleFunc("/logseq/version", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -374,7 +380,7 @@ func (s *server) getFilesMeta(ctx context.Context, req *getFilesMetaRequest) (*g
 		return nil, httperr.Unauthorized("failed to load user ID: %w", err)
 	}
 
-	var out []getFilesMetaResponseSingle
+	out := []getFilesMetaResponseSingle{}
 	for id, md := range mds {
 		if md == nil {
 			// Means the requested ID wasn't found
@@ -665,7 +671,7 @@ func (s *server) getAllFiles(ctx context.Context, req *getAllFilesRequest) (*get
 		return nil, httperr.Unauthorized("failed to load user ID: %w", err)
 	}
 
-	var out []getAllFilesResponseObject
+	out := []getAllFilesResponseObject{}
 	for _, md := range mds {
 		out = append(out, getAllFilesResponseObject{
 			Key:          path.Join(string(userID), string(gID), string(md.ID)),
@@ -756,6 +762,16 @@ func (s *server) getFiles(ctx context.Context, req *getFilesRequest) (*getFilesR
 }
 
 type getTempCredentialRequest struct{}
+
+// Just because it's otherwise hard to verify this will work as expected, and to
+// prevent accidentally removing the parseRequest func below.
+var _ requester = getTempCredentialRequest{}
+
+func (getTempCredentialRequest) parseRequest(r *http.Request) error {
+	// The expected request body is blank for this endpoint. Not `{}`, not `null`, just blank.
+	return nil
+}
+
 type getTempCredentialResponse struct {
 	Credentials *getTempCredentialResponseCredentials `json:"Credentials"`
 	S3Prefix    string                                `json:"S3Prefix"`
@@ -768,7 +784,7 @@ type getTempCredentialResponseCredentials struct {
 }
 
 func (s *server) getTempCredential(ctx context.Context, req *getTempCredentialRequest) (*getTempCredentialResponse, error) {
-	prefix := "temp/" + uuid.NewString()
+	prefix := fmt.Sprintf("temp/%s:%s", s.region, uuid.NewString())
 	creds, err := s.blob.GenerateTempCreds(ctx, prefix)
 	if err != nil {
 		return nil, httperr.Internal("failed to generate temp creds: %w", err)
@@ -781,11 +797,7 @@ func (s *server) getTempCredential(ctx context.Context, req *getTempCredentialRe
 			SecretKey:    creds.SecretAccessKey,
 			SessionToken: creds.SessionToken,
 		},
-		// "logseq-file-sync-bucket-prod/temp/us-east-1:0a63b510-a45a-4b31-a152-efc54bea09b6"
-		// XXX: As far as I can tell, this is just <bucket>/<path>, not sure why the
-		// region is there, or why it's "colon UUID" instead of "slash UUID".
-		// For simplicity, I'm just going to do <bucket>/temp/<uuid> for now.
-		// If the Logseq client doesn't appreciate that, I can revisit.
+		// <logseq bucket name>/temp/<region>:<server chosen UUID>
 		S3Prefix: path.Join(s.blob.Bucket(), prefix),
 	}, nil
 }
@@ -873,16 +885,26 @@ func toHandleFunc[Q any, S any](fn func(context.Context, *Q) (*S, error)) http.H
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Println(r.URL.Path)
 		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			handleError(w, httperr.MethodNotAllowed("request to %q had invalid method", r.URL.Path))
 			return
 		}
 
 		ctx := context.WithValue(r.Context(), authContextKey{}, r.Header.Get("Authorization"))
 
 		var req Q
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
+		var reqA any = req
+		reqI, ok := reqA.(requester)
+		if ok {
+			// Implements custom request parsing, do that.
+			if err := reqI.parseRequest(r); err != nil {
+				handleError(w, httperr.BadRequest("failed to parse custom request: %w", err))
+				return
+			}
+		} else {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				handleError(w, httperr.BadRequest("failed to decode request as JSON: %w", err))
+				return
+			}
 		}
 
 		resp, err := fn(ctx, &req)
@@ -904,6 +926,10 @@ func toHandleFunc[Q any, S any](fn func(context.Context, *Q) (*S, error)) http.H
 			log.Printf("failed to encode response: %v", err)
 		}
 	}
+}
+
+type requester interface {
+	parseRequest(r *http.Request) error
 }
 
 type responder interface {

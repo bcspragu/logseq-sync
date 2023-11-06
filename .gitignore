@@ -1,5 +1,7 @@
 /server
 /frpc.ini
+terraform/tf.out
 terraform/.terraform/
 terraform/.terraform.lock.hcl
 terraform/terraform.tfstate
+terraform/terraform.tfstate.*

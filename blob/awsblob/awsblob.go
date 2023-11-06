@@ -111,20 +111,18 @@ func (c *Client) GenerateTempCreds(ctx context.Context, prefix string) (*blob.Cr
 	// })
 
 	creds := stscreds.NewCredentials(c.sess, c.roleARN, func(sc *stscreds.AssumeRoleProvider) {
-		// TODO: Figure out what the real API uses here.
-		sc.Duration = 2 * time.Minute
-		sc.Policy = aws.String(fmt.Sprintf(`
-    {
+		// This is the minimum.
+		sc.Duration = 900 * time.Second
+		sc.Policy = aws.String(fmt.Sprintf(`{
       "Version": "2012-10-17",
       "Statement": [
         {
           "Effect": "Allow",
           "Action": "s3:PutObject",
           "Resource": "arn:aws:s3:::%s/%s/*"
-        },
+        }
       ]
-    }
-	`, c.bkt, prefix))
+    }`, c.bkt, prefix))
 	})
 	tmpCreds, err := creds.GetWithContext(ctx)
 	if err != nil {

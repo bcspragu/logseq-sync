@@ -8,7 +8,19 @@ It's not currently functional! Definitely don't try to point a real, populated L
 
 Right now, the repo contains (in [`cmd/server`](/cmd/server)) a mostly implemented version of the Logseq API, including credentialed blob uploads, signed blob downloads, an in-memory database (for testing only, will likely write a SQLite backend as the first persistent DB), and most of the API surface at least somewhat implemented.
 
-There's also some documentation for the API in [docs/API.md](/docs/API.md). The server.
+Currently, running any of this requires a modified version of the Logseq codebase ([here](https://github.com/logseq/logseq/blob/05a82a5f268fb77b01f9b8b2a454f5dc15573e70/src/main/frontend/config.cljs#L40-L41)), and [the `@logseq/rsapi` package](https://www.npmjs.com/package/@logseq/rsapi) ([here](https://github.com/logseq/rsapi/blob/18bd98cfc4d084182b534c1c72a6e473a7174b45/sync/src/sync.rs#L26-L28))
+
+On that note, many thanks to the Logseq Team [for open-sourcing `rsapi` recently](https://github.com/logseq/logseq/issues/9311), it made this project significantly easier to work with.
+
+### What Works?
+
+With a modified Logseq, you can use the local server to create a graph, upload (passphrase-encrypted) encryption keys, and get temporary AWS credentials to upload your encrypted files to your private S3 bucket.
+
+...aaaand that's where things start failing. The current issue I'm working on is [figuring out why signed uploads are failing](#1). Once that's done, the whole process _might_ actually work end-to-end, and only require upstream tweaks to allow custom configurations.
+
+### API Documentation
+
+There's some documentation for the API in [docs/API.md](/docs/API.md). This is the area I could benefit the most from having more information/help on, see [Contributing](#contributing) below
 
 ## Open Questions
 
