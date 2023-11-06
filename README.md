@@ -16,7 +16,7 @@ On that note, many thanks to the Logseq Team [for open-sourcing `rsapi` recently
 
 With a modified Logseq, you can use the local server to create a graph, upload (passphrase-encrypted) encryption keys, and get temporary AWS credentials to upload your encrypted files to your private S3 bucket.
 
-...aaaand that's where things start failing. The current issue I'm working on is [figuring out why signed uploads are failing](#1). Once that's done, the whole process _might_ actually work end-to-end, and only require upstream tweaks to allow custom configurations.
+...aaaand that's where things start failing. The current issue I'm working on is [figuring out why signed uploads are failing](https://github.com/bcspragu/logseq-sync/issues/1). Once that's done, the whole process _might_ actually work end-to-end, and only require upstream tweaks to allow custom configurations.
 
 ### API Documentation
 
