@@ -110,6 +110,7 @@ func (c *Client) GenerateTempCreds(ctx context.Context, prefix string) (*blob.Cr
 	// 	RoleName:   res.Role.Arn,
 	// })
 
+	resource := fmt.Sprintf("arn:aws:s3:::%s/%s/*", c.bkt, prefix)
 	creds := stscreds.NewCredentials(c.sess, c.roleARN, func(sc *stscreds.AssumeRoleProvider) {
 		// This is the minimum.
 		sc.Duration = 900 * time.Second
@@ -119,10 +120,10 @@ func (c *Client) GenerateTempCreds(ctx context.Context, prefix string) (*blob.Cr
         {
           "Effect": "Allow",
           "Action": "s3:PutObject",
-          "Resource": "arn:aws:s3:::%s/%s/*"
+          "Resource": "%s"
         }
       ]
-    }`, c.bkt, prefix))
+    }`, resource))
 	})
 	tmpCreds, err := creds.GetWithContext(ctx)
 	if err != nil {
