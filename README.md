@@ -2,7 +2,7 @@
 
 An attempt at an open-source version of the [Logseq Sync](https://blog.logseq.com/how-to-setup-and-use-logseq-sync/) service, intended for individual, self-hosted use.
 
-It's not currently functional! Definitely don't try to point a real, populated Logseq client at it, I have no idea what will happen.
+It's vaguely functional (see [What Works?](#user-content-what-works) below), but decidedly pre-alpha software. Definitely don't try to point a real, populated Logseq client at it, I have no idea what will happen.
 
 ## What's Done/Exists?
 
@@ -14,9 +14,18 @@ On that note, many thanks to the Logseq Team [for open-sourcing `rsapi` recently
 
 ### What Works?
 
-With a modified Logseq, you can use the local server to create a graph, upload (passphrase-encrypted) encryption keys, and get temporary AWS credentials to upload your encrypted files to your private S3 bucket.
+With a modified Logseq, you can use the local server to
 
-...aaaand that's where things start failing. The current issue I'm working on is [figuring out why signed uploads are failing](https://github.com/bcspragu/logseq-sync/issues/1). Once that's done, the whole process _might_ actually work end-to-end, and only require upstream tweaks to allow custom configurations.
+1. Create a graph
+2. Upload (passphrase-encrypted) encryption keys
+3. Get temporary AWS credentials to upload your encrypted files to your private S3 bucket
+4. Upload your encrypted files
+
+And that's basically the full end-to-end flow! The big remaining things are:
+
+- [ ] Figuring out the WebSockets protocol
+  - I think this is for sending "hey there's an update" notifications to clients, but I've only been testing with a single client so far.
+- [ ] Build a real, persistent database backend
 
 ### API Documentation
 
@@ -26,7 +35,9 @@ There's some documentation for the API in [docs/API.md](/docs/API.md). This is t
 
 ### S3 API
 
-The real Logseq Sync API gets temp S3 credentials and uploads files direct to S3. I haven't looked closely enough to see if we can swap this out for something S3-compatible like [s3proxy](https://github.com/gaul/s3proxy) or [minio](https://github.com/minio/minio). I get the sense that `amazonaws.com` may be encoded in the client somewhere, but more testing is required.
+The real Logseq Sync API gets temp S3 credentials and uploads files direct to S3. I haven't looked closely enough to see if we can swap this out for something S3-compatible like [s3proxy](https://github.com/gaul/s3proxy) or [MinIO](https://github.com/minio/minio), see [#2 for a bit more discussion](https://github.com/bcspragu/logseq-sync/issues/2).
+
+Currently, [`amazonaws.com` is hardcoded in the client](https://docs.rs/crate/s3-presign/latest/source/src/lib.rs), so that'll be part of a larger discussion on how to make all of this configurable in the long run.
 
 ## Associated Changes to Logseq
 
