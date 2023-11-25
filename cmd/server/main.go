@@ -130,7 +130,7 @@ func run(args []string) error {
 		Host:   "api.logseq.com",
 	}
 
-	awsBlob, err := awsblob.New(*s3Bucket, *s3RoleARN)
+	awsBlob, err := awsblob.New(*s3Bucket, *s3Region, *s3RoleARN)
 	if err != nil {
 		return fmt.Errorf("failed to init AWS blob backend: %w", err)
 	}
@@ -385,7 +385,7 @@ func (s *server) getFilesMeta(ctx context.Context, req *getFilesMetaRequest) (*g
 		if md == nil {
 			// Means the requested ID wasn't found
 			out = append(out, getFilesMetaResponseSingle{
-				FilePath: string(md.ID),
+				FilePath: string(id),
 				Error:    fmt.Sprintf("not found %s/%s/%s", userID, gID, id),
 			})
 			continue

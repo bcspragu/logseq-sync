@@ -17,16 +17,16 @@ import (
 
 type Client struct {
 	sess *session.Session
-	// iam  *iam.IAM
-	// sts  *sts.STS
-	s3 *s3.S3
+	s3   *s3.S3
 
 	bkt     string
 	roleARN string
 }
 
-func New(bkt, roleARN string) (*Client, error) {
-	sess, err := session.NewSession()
+func New(bkt, region, roleARN string) (*Client, error) {
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String(region),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to authenticate with AWS: %w", err)
 	}
@@ -55,7 +55,7 @@ func (c *Client) Move(ctx context.Context, srcPath, destPath string) (*blob.Move
 	src, dest := path.Join(c.bkt, srcPath), path.Join(c.bkt, destPath)
 	attrResp, err := c.s3.GetObjectAttributes(&s3.GetObjectAttributesInput{
 		Bucket: aws.String(c.bkt),
-		Key:    aws.String(src),
+		Key:    aws.String(srcPath),
 		ObjectAttributes: []*string{
 			aws.String("Checksum"),
 			aws.String("ObjectSize"),
@@ -74,7 +74,7 @@ func (c *Client) Move(ctx context.Context, srcPath, destPath string) (*blob.Move
 	if _, err := c.s3.CopyObject(&s3.CopyObjectInput{
 		Bucket:     aws.String(c.bkt),
 		CopySource: aws.String(src),
-		Key:        aws.String(dest),
+		Key:        aws.String(destPath),
 	}); err != nil {
 		return nil, fmt.Errorf("failed to copy file %q to %q: %w", src, dest, err)
 	}
@@ -93,37 +93,20 @@ func (c *Client) Move(ctx context.Context, srcPath, destPath string) (*blob.Move
 }
 
 func (c *Client) GenerateTempCreds(ctx context.Context, prefix string) (*blob.Credentials, error) {
-	// c.iam.PutRolePolicy(&iam.PutRolePolicyInput{
-	// 	PolicyDocument: aws.String(fmt.Sprintf(`
-	//    {
-	//      "Version": "2012-10-17",
-	//      "Statement": [
-	//        {
-	//          "Effect": "Allow",
-	//          "Action": "s3:PutObject",
-	//          "Resource": "arn:aws:s3:::%s/%s/*"
-	//        },
-	//      ]
-	//    }
-	// `, c.bkt, prefix)),
-	// 	PolicyName: aws.String("bucket-access-" + prefix),
-	// 	RoleName:   res.Role.Arn,
-	// })
-
 	resource := fmt.Sprintf("arn:aws:s3:::%s/%s/*", c.bkt, prefix)
 	creds := stscreds.NewCredentials(c.sess, c.roleARN, func(sc *stscreds.AssumeRoleProvider) {
 		// This is the minimum.
 		sc.Duration = 900 * time.Second
 		sc.Policy = aws.String(fmt.Sprintf(`{
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Effect": "Allow",
-          "Action": "s3:PutObject",
-          "Resource": "%s"
-        }
-      ]
-    }`, resource))
+	      "Version": "2012-10-17",
+	      "Statement": [
+	        {
+	          "Effect": "Allow",
+	          "Action": "s3:PutObject",
+	          "Resource": "%s"
+	        }
+	      ]
+	    }`, resource))
 	})
 	tmpCreds, err := creds.GetWithContext(ctx)
 	if err != nil {
@@ -133,7 +116,6 @@ func (c *Client) GenerateTempCreds(ctx context.Context, prefix string) (*blob.Cr
 	if err != nil {
 		return nil, fmt.Errorf("failed to credential expiration: %w", err)
 	}
-
 	return &blob.Credentials{
 		AccessKeyID:     tmpCreds.AccessKeyID,
 		SecretAccessKey: tmpCreds.SecretAccessKey,

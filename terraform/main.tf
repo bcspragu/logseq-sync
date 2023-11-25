@@ -23,6 +23,24 @@ data "aws_iam_policy_document" "assume_role" {
   }
 }
 
+data "aws_iam_policy_document" "logseq" {
+  statement {
+    sid     = "AllowS3Access"
+    effect  = "Allow"
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.default.arn,
+      "${aws_s3_bucket.default.arn}/*",
+    ]
+  }
+}
+
+resource "aws_iam_policy" "logseq" {
+  name   = "logseq_s3_policy"
+  path   = "/"
+  policy = data.aws_iam_policy_document.logseq.json
+}
+
 resource "aws_iam_role" "sync" {
   name = "logseq_sync"
 
@@ -31,6 +49,11 @@ resource "aws_iam_role" "sync" {
   tags = merge(local.base_tags, {
     Name = "Temp Credential Role"
   })
+}
+
+resource "aws_iam_role_policy_attachment" "logseq_bucket_access" {
+  role       = aws_iam_role.sync.name
+  policy_arn = aws_iam_policy.logseq.arn
 }
 
 resource "aws_s3_bucket" "default" {
