@@ -6,7 +6,7 @@ It's vaguely functional (see [What Works?](#user-content-what-works) below), but
 
 ## What's Done/Exists?
 
-Right now, the repo contains (in [`cmd/server`](/cmd/server)) a mostly implemented version of the Logseq API, including credentialed blob uploads, signed blob downloads, an in-memory database (for testing only, will likely write a SQLite backend as the first persistent DB), and most of the API surface at least somewhat implemented.
+Right now, the repo contains (in [`cmd/server`](/cmd/server)) a mostly implemented version of the Logseq API, including credentialed blob uploads, signed blob downloads, a SQLite database for persistence, and most of the API surface at least somewhat implemented.
 
 Currently, running any of this requires a modified version of the Logseq codebase ([here](https://github.com/logseq/logseq/blob/05a82a5f268fb77b01f9b8b2a454f5dc15573e70/src/main/frontend/config.cljs#L40-L41)), and [the `@logseq/rsapi` package](https://www.npmjs.com/package/@logseq/rsapi) ([here](https://github.com/logseq/rsapi/blob/18bd98cfc4d084182b534c1c72a6e473a7174b45/sync/src/sync.rs#L26-L28))
 
@@ -25,7 +25,7 @@ And that's basically the full end-to-end flow! The big remaining things are:
 
 - [ ] Figuring out the WebSockets protocol
   - I think this is for sending "hey there's an update" notifications to clients, but I've only been testing with a single client so far.
-- [ ] Build a real, persistent database backend
+- [ ] Figure out how/when to increment the transaction (`tx`) counter
 
 ### API Documentation
 
@@ -42,6 +42,20 @@ Currently, [`amazonaws.com` is hardcoded in the client](https://docs.rs/crate/s3
 ## Associated Changes to Logseq
 
 Being able to connect to a self-hosted sync server requires some changes to Logseq as well, namely to specify where your sync server can be accessed. Those changes are in a rough, non-functional state here: https://github.com/logseq/logseq/compare/master...bcspragu:logseq:brandon/settings-hack
+
+## Adding a database migration
+
+The self-hosted sync backend has rudimentary support for persistence in a SQLite database. We use [sqlc](https://sqlc.dev) to do Go codegen for SQL queries, and [Atlas](https://github.com/ariga/atlas) to manage generating diffs.
+
+The process for changing the database schema looks like:
+
+1. Update [`db/sqlite/schema.sql`](/db/sqlite/schema.sql) with your desired changes
+2. Run `./scripts/add_migration.sh <name of migration>` to generate the relevant migration
+3. Run `./scripts/apply_migrations.sh` to apply the migrations to your SQLite database
+
+### Why do it this way?
+
+With this workflow, the `db/sqlite/migrations/` directory is more or less unused by both `sqlc` and the actual server program. The reason it's structured this way is to keep a more reviewable audit log of the changes to a database, which a single `schema.sql` doesn't give you.
 
 ## Contributing
 

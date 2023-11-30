@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go v1.47.0
 	github.com/golang-jwt/jwt/v5 v5.0.0
 	github.com/google/uuid v1.4.0
+	github.com/mattn/go-sqlite3 v1.14.18
 	nhooyr.io/websocket v1.8.9
 )
 

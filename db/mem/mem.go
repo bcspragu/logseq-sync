@@ -11,6 +11,7 @@
 package mem
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -37,8 +38,7 @@ func New() *DB {
 	}
 }
 
-func (d *DB) DeleteGraph(id db.GraphID) error {
-
+func (d *DB) DeleteGraph(_ context.Context, id db.GraphID) error {
 	if _, ok := d.graphs[id]; !ok {
 		return db.NotExists("graph", id)
 	}
@@ -46,7 +46,7 @@ func (d *DB) DeleteGraph(id db.GraphID) error {
 	return nil
 }
 
-func (d *DB) CreateGraph(name string) (db.GraphID, db.Tx, error) {
+func (d *DB) CreateGraph(_ context.Context, name string) (db.GraphID, db.Tx, error) {
 	for _, g := range d.graphs {
 		if name == g.graph.Name {
 			return "", 0, db.AlreadyExists("graph", "name")
@@ -67,7 +67,7 @@ func (d *DB) CreateGraph(name string) (db.GraphID, db.Tx, error) {
 	return id, tx, nil
 }
 
-func (d *DB) Graphs() ([]*db.Graph, error) {
+func (d *DB) Graphs(_ context.Context) ([]*db.Graph, error) {
 	var out []*db.Graph
 	for _, g := range d.graphs {
 		out = append(out, g.graph)
@@ -75,7 +75,7 @@ func (d *DB) Graphs() ([]*db.Graph, error) {
 	return out, nil
 }
 
-func (d *DB) Tx(id db.GraphID) (db.Tx, error) {
+func (d *DB) Tx(_ context.Context, id db.GraphID) (db.Tx, error) {
 	g, ok := d.graphs[id]
 	if !ok {
 		return 0, db.NotExists("graph", id)
@@ -83,7 +83,7 @@ func (d *DB) Tx(id db.GraphID) (db.Tx, error) {
 	return g.tx, nil
 }
 
-func (d *DB) IncrementTx(id db.GraphID) (db.Tx, error) {
+func (d *DB) IncrementTx(_ context.Context, id db.GraphID) (db.Tx, error) {
 	g, ok := d.graphs[id]
 	if !ok {
 		return 0, db.NotExists("graph", id)
@@ -92,7 +92,7 @@ func (d *DB) IncrementTx(id db.GraphID) (db.Tx, error) {
 	return g.tx, nil
 }
 
-func (d *DB) SetTx(id db.GraphID, tx db.Tx) error {
+func (d *DB) SetTx(_ context.Context, id db.GraphID, tx db.Tx) error {
 	g, ok := d.graphs[id]
 	if !ok {
 		return db.NotExists("graph", id)
@@ -101,7 +101,7 @@ func (d *DB) SetTx(id db.GraphID, tx db.Tx) error {
 	return nil
 }
 
-func (d *DB) Graph(id db.GraphID) (*db.Graph, error) {
+func (d *DB) Graph(_ context.Context, id db.GraphID) (*db.Graph, error) {
 	g, ok := d.graphs[id]
 	if !ok {
 		return nil, db.NotExists("graph", id)
@@ -109,7 +109,7 @@ func (d *DB) Graph(id db.GraphID) (*db.Graph, error) {
 	return g.graph, nil
 }
 
-func (d *DB) AddGraphSalt(id db.GraphID, salt *db.GraphSalt) error {
+func (d *DB) AddGraphSalt(_ context.Context, id db.GraphID, salt *db.GraphSalt) error {
 	g, ok := d.graphs[id]
 	if !ok {
 		return db.NotExists("graph", id)
@@ -118,7 +118,7 @@ func (d *DB) AddGraphSalt(id db.GraphID, salt *db.GraphSalt) error {
 	return nil
 }
 
-func (d *DB) GraphSalts(id db.GraphID) ([]*db.GraphSalt, error) {
+func (d *DB) GraphSalts(_ context.Context, id db.GraphID) ([]*db.GraphSalt, error) {
 	g, ok := d.graphs[id]
 	if !ok {
 		return nil, db.NotExists("graph", id)
@@ -126,7 +126,7 @@ func (d *DB) GraphSalts(id db.GraphID) ([]*db.GraphSalt, error) {
 	return g.salts, nil
 }
 
-func (d *DB) AddGraphEncryptKeys(id db.GraphID, gek *db.GraphEncryptKey) error {
+func (d *DB) AddGraphEncryptKey(_ context.Context, id db.GraphID, gek *db.GraphEncryptKey) error {
 	g, ok := d.graphs[id]
 	if !ok {
 		return db.NotExists("graph", id)
@@ -135,7 +135,7 @@ func (d *DB) AddGraphEncryptKeys(id db.GraphID, gek *db.GraphEncryptKey) error {
 	return nil
 }
 
-func (d *DB) GraphEncryptKeys(id db.GraphID) ([]*db.GraphEncryptKey, error) {
+func (d *DB) GraphEncryptKeys(_ context.Context, id db.GraphID) ([]*db.GraphEncryptKey, error) {
 	g, ok := d.graphs[id]
 	if !ok {
 		return nil, db.NotExists("graph", id)
@@ -143,7 +143,7 @@ func (d *DB) GraphEncryptKeys(id db.GraphID) ([]*db.GraphEncryptKey, error) {
 	return g.keys, nil
 }
 
-func (d *DB) SetFileMeta(id db.GraphID, md *db.FileMeta) error {
+func (d *DB) SetFileMeta(_ context.Context, id db.GraphID, md *db.FileMeta) error {
 	if md.ID == "" {
 		return errors.New("no file ID set on metadata")
 	}
@@ -155,7 +155,7 @@ func (d *DB) SetFileMeta(id db.GraphID, md *db.FileMeta) error {
 	return nil
 }
 
-func (d *DB) BatchFileMeta(id db.GraphID, fIDs []db.FileID) (map[db.FileID]*db.FileMeta, error) {
+func (d *DB) BatchFileMeta(_ context.Context, id db.GraphID, fIDs []db.FileID) (map[db.FileID]*db.FileMeta, error) {
 	g, ok := d.graphs[id]
 	if !ok {
 		return nil, db.NotExists("graph", id)
@@ -178,7 +178,7 @@ func (d *DB) BatchFileMeta(id db.GraphID, fIDs []db.FileID) (map[db.FileID]*db.F
 	return out, nil
 }
 
-func (d *DB) AllFileMeta(id db.GraphID) ([]*db.FileMeta, error) {
+func (d *DB) AllFileMeta(_ context.Context, id db.GraphID) ([]*db.FileMeta, error) {
 	g, ok := d.graphs[id]
 	if !ok {
 		return nil, db.NotExists("graph", id)

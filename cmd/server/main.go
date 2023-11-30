@@ -27,8 +27,9 @@ import (
 	"github.com/bcspragu/logseq-sync/blob"
 	"github.com/bcspragu/logseq-sync/blob/awsblob"
 	"github.com/bcspragu/logseq-sync/db"
+	"github.com/bcspragu/logseq-sync/db/mem"
+	"github.com/bcspragu/logseq-sync/db/sqlite"
 	"github.com/bcspragu/logseq-sync/httperr"
-	"github.com/bcspragu/logseq-sync/mem"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"nhooyr.io/websocket"
@@ -57,27 +58,27 @@ func (w *ResponseWriter) Write(p []byte) (int, error) {
 }
 
 type DB interface {
-	IncrementTx(id db.GraphID) (db.Tx, error)
-	SetTx(id db.GraphID, tx db.Tx) error
-	Tx(id db.GraphID) (db.Tx, error)
+	IncrementTx(ctx context.Context, id db.GraphID) (db.Tx, error)
+	SetTx(ctx context.Context, id db.GraphID, tx db.Tx) error
+	Tx(ctx context.Context, id db.GraphID) (db.Tx, error)
 
-	Graph(id db.GraphID) (*db.Graph, error)
-	Graphs() ([]*db.Graph, error)
-	CreateGraph(name string) (db.GraphID, db.Tx, error)
-	DeleteGraph(db.GraphID) error
+	Graph(ctx context.Context, id db.GraphID) (*db.Graph, error)
+	Graphs(ctx context.Context) ([]*db.Graph, error)
+	CreateGraph(ctx context.Context, name string) (db.GraphID, db.Tx, error)
+	DeleteGraph(context.Context, db.GraphID) error
 
-	AddGraphSalt(id db.GraphID, salt *db.GraphSalt) error
-	GraphSalts(id db.GraphID) ([]*db.GraphSalt, error)
+	AddGraphSalt(ctx context.Context, id db.GraphID, salt *db.GraphSalt) error
+	GraphSalts(ctx context.Context, id db.GraphID) ([]*db.GraphSalt, error)
 
-	AddGraphEncryptKeys(id db.GraphID, gek *db.GraphEncryptKey) error
-	GraphEncryptKeys(id db.GraphID) ([]*db.GraphEncryptKey, error)
+	AddGraphEncryptKey(ctx context.Context, id db.GraphID, gek *db.GraphEncryptKey) error
+	GraphEncryptKeys(ctx context.Context, id db.GraphID) ([]*db.GraphEncryptKey, error)
 
-	SetFileMeta(id db.GraphID, md *db.FileMeta) error
+	SetFileMeta(ctx context.Context, id db.GraphID, md *db.FileMeta) error
 
 	// Because the Logseq client can/will request files it hasn't uploaded yet, the
 	// map will contain nil entries for requested files that don't exist
-	BatchFileMeta(id db.GraphID, fIDs []db.FileID) (map[db.FileID]*db.FileMeta, error)
-	AllFileMeta(id db.GraphID) ([]*db.FileMeta, error)
+	BatchFileMeta(ctx context.Context, id db.GraphID, fIDs []db.FileID) (map[db.FileID]*db.FileMeta, error)
+	AllFileMeta(ctx context.Context, id db.GraphID) ([]*db.FileMeta, error)
 }
 
 type Blob interface {
@@ -117,6 +118,9 @@ func run(args []string) error {
 		s3Bucket  = fs.String("s3_bucket", "", "Name of the S3 bucket to hand out temp credentials for.")
 		s3Region  = fs.String("s3_region", "us-west-2", "Name of the S3 region where AWS resources live")
 		s3RoleARN = fs.String("s3_role_arn", "", "ARN of the role to grant temporary credentials for S3 bucket access from.")
+
+		useSQLite  = fs.Bool("use_sqlite", true, "If true, use the SQLite backend instead of the in-memory database")
+		sqlitePath = fs.String("sqlite_path", "logseq-sync.db", "Path to the SQLite database, will be created if it doesn't exist")
 	)
 	if err := fs.Parse(args[1:]); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
@@ -135,9 +139,21 @@ func run(args []string) error {
 		return fmt.Errorf("failed to init AWS blob backend: %w", err)
 	}
 
+	var db DB
+	if *useSQLite {
+		log.Printf("Using SQLite datbase at %q", *sqlitePath)
+		sdb, err := sqlite.New(*sqlitePath)
+		if err != nil {
+			return fmt.Errorf("failed to open SQLite database: %w", err)
+		}
+		db = sdb
+	} else {
+		db = mem.New()
+	}
+
 	s := server{
 		blob:        awsBlob,
-		db:          mem.New(),
+		db:          db,
 		shouldProxy: *shouldProxy,
 		proxy: &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
@@ -370,7 +386,7 @@ func (s *server) getFilesMeta(ctx context.Context, req *getFilesMetaRequest) (*g
 	}
 
 	gID := db.GraphID(req.GraphUUID)
-	mds, err := s.db.BatchFileMeta(gID, fIDs)
+	mds, err := s.db.BatchFileMeta(ctx, gID, fIDs)
 	if err != nil {
 		return nil, httperr.Internal("failed to load batch file meta: %w", err)
 	}
@@ -460,7 +476,7 @@ type listGraphsResponseGraph struct {
 }
 
 func (s *server) listGraphs(ctx context.Context, req *listGraphsRequest) (*listGraphsResponse, error) {
-	graphs, err := s.db.Graphs()
+	graphs, err := s.db.Graphs(ctx)
 	if err != nil {
 		return nil, httperr.Internal("failed to load graphs: %w", err)
 	}
@@ -494,7 +510,7 @@ type createGraphResponse struct {
 }
 
 func (s *server) createGraph(ctx context.Context, req *createGraphRequest) (*createGraphResponse, error) {
-	gID, curTx, err := s.db.CreateGraph(req.GraphName)
+	gID, curTx, err := s.db.CreateGraph(ctx, req.GraphName)
 	if db.IsAlreadyExists(err) {
 		return nil, httperr.
 			Conflict("graph already exists: %w", err).
@@ -522,7 +538,7 @@ func (*deleteGraphResponse) respond(w http.ResponseWriter, r *http.Request) {
 func (s *server) deleteGraph(ctx context.Context, req *deleteGraphRequest) (*deleteGraphResponse, error) {
 	gID := db.GraphID(req.GraphUUID)
 
-	if err := s.db.DeleteGraph(gID); err != nil {
+	if err := s.db.DeleteGraph(ctx, gID); err != nil {
 		return nil, httperr.Internal("failed to delete graph: %w", err)
 	}
 
@@ -540,7 +556,7 @@ type getGraphEncryptKeysResponse struct {
 func (s *server) getGraphEncryptKeys(ctx context.Context, req *getGraphEncryptKeysRequest) (*getGraphEncryptKeysResponse, error) {
 	gID := db.GraphID(req.GraphUUID)
 
-	keys, err := s.db.GraphEncryptKeys(gID)
+	keys, err := s.db.GraphEncryptKeys(ctx, gID)
 	if err != nil {
 		return nil, httperr.Internal("failed to get graph encrypt keys %w", err)
 	}
@@ -566,7 +582,7 @@ type createGraphSaltResponse struct {
 }
 
 func (s *server) createGraphSalt(ctx context.Context, req *createGraphSaltRequest) (*createGraphSaltResponse, error) {
-	_, err := s.db.Graph(db.GraphID(req.GraphUUID))
+	_, err := s.db.Graph(ctx, db.GraphID(req.GraphUUID))
 	if db.IsNotExists(err) {
 		return nil, httperr.NotFound("graph %q wasn't found", req.GraphUUID)
 	} else if err != nil {
@@ -597,7 +613,7 @@ type getGraphSaltResponse struct {
 }
 
 func (s *server) getGraphSalt(ctx context.Context, req *getGraphSaltRequest) (*getGraphSaltResponse, error) {
-	salts, err := s.db.GraphSalts(db.GraphID(req.GraphUUID))
+	salts, err := s.db.GraphSalts(ctx, db.GraphID(req.GraphUUID))
 	if db.IsNotExists(err) {
 		return nil, httperr.NotFound("graph %q wasn't found", req.GraphUUID)
 	} else if err != nil {
@@ -630,7 +646,7 @@ func (*uploadGraphEncryptKeysResponse) respond(w http.ResponseWriter, r *http.Re
 }
 
 func (s *server) uploadGraphEncryptKeys(ctx context.Context, req *uploadGraphEncryptKeysRequest) (*uploadGraphEncryptKeysResponse, error) {
-	err := s.db.AddGraphEncryptKeys(db.GraphID(req.GraphUUID), &db.GraphEncryptKey{
+	err := s.db.AddGraphEncryptKey(ctx, db.GraphID(req.GraphUUID), &db.GraphEncryptKey{
 		EncryptedPrivateKey: req.EncryptedPrivateKey,
 		PublicKey:           req.PublicKey,
 	})
@@ -661,7 +677,7 @@ func (s *server) getAllFiles(ctx context.Context, req *getAllFilesRequest) (*get
 	gID := db.GraphID(req.GraphUUID)
 
 	// TODO: We definitely want to actually use the built in pagination here, need to figure out how the real API does it (e.g. batch size, token format, etc)
-	mds, err := s.db.AllFileMeta(gID)
+	mds, err := s.db.AllFileMeta(ctx, gID)
 	if err != nil {
 		return nil, httperr.Internal("failed to load batch file meta: %w", err)
 	}
@@ -696,7 +712,7 @@ type getTxidResponse struct {
 }
 
 func (s *server) getTxid(ctx context.Context, req *getTxidRequest) (*getTxidResponse, error) {
-	tx, err := s.db.Tx(db.GraphID(req.GraphUUID))
+	tx, err := s.db.Tx(ctx, db.GraphID(req.GraphUUID))
 	if db.IsNotExists(err) {
 		return nil, httperr.NotFound("graph %q wasn't found", req.GraphUUID)
 	} else if err != nil {
@@ -728,7 +744,7 @@ type getFilesRequest struct {
 	GraphUUID string   `json:"GraphUUID"`
 }
 type getFilesResponse struct {
-	PresignedFileURLs map[string]string `json:"PresignedFileURLs"`
+	PresignedFileURLs map[string]string `json:"PresignedFileUrls"`
 }
 
 func (s *server) getFiles(ctx context.Context, req *getFilesRequest) (*getFilesResponse, error) {
@@ -738,7 +754,7 @@ func (s *server) getFiles(ctx context.Context, req *getFilesRequest) (*getFilesR
 	}
 
 	gID := db.GraphID(req.GraphUUID)
-	if _, err := s.db.Graph(gID); db.IsNotExists(err) {
+	if _, err := s.db.Graph(ctx, gID); db.IsNotExists(err) {
 		return nil, httperr.NotFound("graph %q wasn't found", req.GraphUUID)
 	} else if err != nil {
 		return nil, httperr.Internal("failed to load graph: %w", err)
@@ -827,7 +843,7 @@ func (s *server) updateFiles(ctx context.Context, req *updateFilesRequest) (*upd
 
 	gID := db.GraphID(req.GraphUUID)
 
-	dbTxID, err := s.db.Tx(gID)
+	dbTxID, err := s.db.Tx(ctx, gID)
 	if err != nil {
 		return nil, httperr.Internal("failed to load TX: %w", err)
 	}
@@ -853,7 +869,7 @@ func (s *server) updateFiles(ctx context.Context, req *updateFilesRequest) (*upd
 		if err != nil {
 			return nil, httperr.Internal("failed to move temp file: %w", err)
 		}
-		if err := s.db.SetFileMeta(gID, &db.FileMeta{
+		if err := s.db.SetFileMeta(ctx, gID, &db.FileMeta{
 			ID:             db.FileID(id),
 			BlobPath:       path.Join(s.blob.Bucket(), dstPath),
 			Checksum:       checksum,
@@ -868,7 +884,7 @@ func (s *server) updateFiles(ctx context.Context, req *updateFilesRequest) (*upd
 	}
 
 	curTX := max(req.Txid, int64(dbTxID)) + 1
-	if err := s.db.SetTx(gID, db.Tx(curTX)); err != nil {
+	if err := s.db.SetTx(ctx, gID, db.Tx(curTX)); err != nil {
 		return nil, httperr.Internal("failed to update tx: %w", err)
 	}
 
