@@ -23,8 +23,8 @@ With a modified Logseq, you can use the local server to
 
 And that's basically the full end-to-end flow! The big remaining things are:
 
-- [ ] Figuring out the WebSockets protocol
-  - I think this is for sending "hey there's an update" notifications to clients, but I've only been testing with a single client so far.
+- [ ] Implement the WebSockets protocol
+  - There's [some documentation](/docs/WEBSOCKET.md) for it
 - [ ] Figure out how/when to increment the transaction (`tx`) counter
 
 ### API Documentation
