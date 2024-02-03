@@ -59,6 +59,23 @@ With this workflow, the `db/sqlite/migrations/` directory is more or less unused
 
 ## Contributing
 
-If you're interested in contributing, thanks! I sincerely appreciate it. That said, at this stage in the project, there's not a lot of work that can be parallelized, I need to clean some stuff up before people can start implementing features, fixing bugs etc.
+If you're interested in contributing, thanks! I sincerely appreciate it. There's a few main avenues for contributions:
+
+### Getting official buy-in from Logseq
+
+The main blocker right now is getting buy-in from the Logseq team, as I don't want to do the work to add self-hosting settings to the Logseq codebase if they won't be accepted upstream. I've [raised the question on the Logseq forums](https://discuss.logseq.com/t/building-a-self-hostable-sync-implementation/21850/17), as well as in [a GitHub Discussion on the Logseq repo](https://github.com/logseq/logseq/discussions/10733), but have received no official response.
+
+### Understanding/documenting the API
 
 One area where I would love help is specifying the official API more accurately. My API docs are based on a dataset of one, my own account. So there are areas that are underspecified, unknown, or where I just don't understand the flow. Any help there would be great!
+
+Specifically, I'd like to understand:
+
+1. The details of the WebSocket protocol ([doc started here](/docs/WEBSOCKET.md)), and
+2. How and when to update the transaction counter, `tx` in the API
+
+### Debugging S3 signature issues
+
+I believe there's a bug ([filed upstream](https://github.com/logseq/rsapi/issues/2), [initially here](https://github.com/bcspragu/logseq-sync/issues/1)) in the `s3-presign` crate used by [Logseq's `rsapi` component](https://github.com/logseq/rsapi), which handles the actual sync protocol bits (encryption, key generation, S3 upload, etc).
+
+The bug causes flaky uploads with self-hosted, AWS-backed (i.e. S3 + STS) servers, but I haven't had the time to investigate the exact root cause. The source code for the `s3-presign` crate [is available here](https://docs.rs/s3-presign/latest/src/s3_presign/lib.rs.html), [the GitHub repo itself](https://github.com/andelf/s3-presign) doesn't appear to be public.
